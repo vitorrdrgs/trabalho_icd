@@ -348,6 +348,7 @@ def main() -> None:
         raise SystemExit(f"Nenhuma referência encontrada no intervalo {args.start} até {args.end}")
 
     buffer_rows: List[FipeRow] = []
+    total_written = 0
     total_errors = 0
 
     with open(log_path, "a", encoding="utf-8") as logf:
@@ -440,14 +441,14 @@ def main() -> None:
                             buffer_rows.append(row)
                             total_written += 1
 
+                            time.sleep(0.35)
+
                         except Exception as e:
                             total_errors += 1
                             logf.write(
                                 f"ERRO valor ref={ref.codigo_tabela_referencia} marca={marca['codigo']} "
                                 f"modelo={modelo['codigo']} ano_modelo={ym_code}: {e}\n"
                             )
-
-                            time.sleep(0.35)
 
                 if buffer_rows:
                     append_rows_csv(csv_path, buffer_rows)
