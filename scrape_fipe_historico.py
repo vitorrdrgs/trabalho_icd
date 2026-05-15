@@ -350,6 +350,7 @@ def main() -> None:
     buffer_rows: List[FipeRow] = []
     total_written = 0
     total_errors = 0
+    total_written = 0
 
     with open(log_path, "a", encoding="utf-8") as logf:
         logf.write(f"\n=== INÍCIO {time.strftime('%Y-%m-%d %H:%M:%S')} ===\n")
@@ -414,6 +415,8 @@ def main() -> None:
                                 modelo["codigo"],
                                 ym_code,
                             )
+
+                            print(payload_resp)
 
                             ano, fuel_code = parse_year_model_code(ym_code)
 
