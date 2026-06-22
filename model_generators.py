@@ -45,7 +45,46 @@ def generate_prophet_model(
     method: str,
     tol: float = 0
 ):
+    """
+    Otimiza os hiperparâmetros de um modelo Prophet utilizando Optuna.
 
+    Para cada trial, um conjunto de hiperparâmetros é amostrado,
+    o modelo é treinado com os dados de treino e avaliado sobre o
+    conjunto de teste utilizando MAE ou MAPE ponderado.
+
+    Parameters
+    ----------
+    train : pd.DataFrame
+        DataFrame de treinamento contendo as colunas 'ds', 'y' e,
+        opcionalmente, as variáveis exógenas.
+
+    test : pd.DataFrame
+        DataFrame de teste contendo as colunas 'ds', 'y' e,
+        opcionalmente, as variáveis exógenas.
+
+    exog : list[str]
+        Lista com os nomes das variáveis exógenas utilizadas pelo modelo.
+
+    n_trials : int
+        Número máximo de avaliações realizadas pelo Optuna.
+
+    method : str
+        Métrica utilizada na otimização.
+        Valores aceitos: 'mae' ou 'mape'.
+
+    tol : float, default=0
+        Valor alvo da métrica. Caso seja atingido ou superado,
+        o processo de otimização é interrompido antecipadamente.
+
+    Returns
+    -------
+    tuple[prophet.Prophet, dict, float]
+        Tupla contendo:
+
+        - Modelo Prophet configurado com os melhores hiperparâmetros.
+        - Dicionário com os melhores hiperparâmetros encontrados.
+        - Melhor valor da métrica obtido durante a otimização.
+    """
     def objective(trial):
 
         params = {
@@ -84,27 +123,13 @@ def generate_prophet_model(
         try:
             model = prophet.Prophet(**params)
 
-
-            selected_features = []
-
-            for e in exog:
-                use = trial.suggest_categorical(
-                    f"use_{e}",
-                    [True, False]
-                )
-
-                if use:
-                    model.add_regressor(e)
-                    selected_features.append(e)
-
-
             model.fit(
-                train[['ds', 'y'] + selected_features]
+                train[['ds', 'y'] + exog]
             )
 
 
             forecast = model.predict(
-                test[['ds'] + selected_features]
+                test[['ds'] + exog]
             )
             
             weights = np.arange(1, len(test)+1)
@@ -124,11 +149,10 @@ def generate_prophet_model(
             if metric <= tol:
                 trial.study.stop()
 
-            penalty = 0.001 * len(selected_features)
-
-            return metric + penalty
+            return metric
         except Exception as e:
             print(e)
+            return np.inf
 
     study = optuna.create_study(
         direction="minimize"
@@ -142,34 +166,53 @@ def generate_prophet_model(
 
 
     best_params = study.best_params
-
-
-    selected_features = [
-        e for e in exog
-        if best_params[f"use_{e}"]
-    ]
-
-
     model_params = {
         k:v
         for k,v in best_params.items()
-        if not k.startswith("use_")
     }
 
     model = prophet.Prophet(**model_params)
-    for e in selected_features:
-        model.add_regressor(e)
-
     return (
         model,
-        {
-            "params": model_params,
-            "features": selected_features
-        },
+        model_params,
         study.best_value
     )
 
-def generate_ets_model(train: pd.Series, test: pd.Series, n_trials: int, method: str, tol: float = 0):    
+def generate_ets_model(train: pd.Series, test: pd.Series, n_trials: int, method: str, tol: float = 0):   
+    """
+    Otimiza os hiperparâmetros de um modelo ETS utilizando Optuna.
+
+    O modelo é avaliado sobre o conjunto de teste utilizando previsões
+    para todo o horizonte e métricas ponderadas por posição temporal.
+
+    Parameters
+    ----------
+    train : pd.Series
+        Série temporal utilizada para treinamento.
+
+    test : pd.Series
+        Série temporal utilizada para validação.
+
+    n_trials : int
+        Número máximo de avaliações realizadas pelo Optuna.
+
+    method : str
+        Métrica utilizada na otimização.
+        Valores aceitos: 'mae' ou 'mape'.
+
+    tol : float, default=0
+        Valor alvo da métrica. Caso seja atingido ou superado,
+        o processo de otimização é interrompido antecipadamente.
+
+    Returns
+    -------
+    tuple[ETSModel, dict, float]
+        Tupla contendo:
+
+        - Modelo ETS configurado com os melhores hiperparâmetros.
+        - Dicionário com os melhores hiperparâmetros encontrados.
+        - Melhor valor da métrica obtido durante a otimização.
+    """ 
     def objective(trial):
 
         error = trial.suggest_categorical("error", ["add", "mul"])
@@ -245,6 +288,50 @@ def generate_ets_model(train: pd.Series, test: pd.Series, n_trials: int, method:
     return (model, params, best_value)
 
 def generate_sarimax_model(train: pd.Series, test: pd.Series, train_exog: pd.DataFrame | None, test_exog: pd.DataFrame | None, n_trials: int, method: str, tol: float = 0):
+    """
+    Otimiza os hiperparâmetros de um modelo SARIMAX utilizando Optuna.
+
+    O processo realiza busca sobre os parâmetros não sazonais,
+    sazonais e de tendência do modelo, avaliando o desempenho
+    das previsões sobre o conjunto de teste.
+
+    Parameters
+    ----------
+    train : pd.Series
+        Série temporal utilizada para treinamento.
+
+    test : pd.Series
+        Série temporal utilizada para validação.
+
+    train_exog : pd.DataFrame | None
+        Variáveis exógenas utilizadas durante o treinamento.
+        Pode ser None caso o modelo não utilize regressoras.
+
+    test_exog : pd.DataFrame | None
+        Variáveis exógenas correspondentes ao horizonte de teste.
+        Pode ser None caso o modelo não utilize regressoras.
+
+    n_trials : int
+        Número máximo de avaliações realizadas pelo Optuna.
+
+    method : str
+        Métrica utilizada na otimização.
+        Valores aceitos: 'mae' ou 'mape'.
+
+    tol : float, default=0
+        Valor alvo da métrica. Caso seja atingido ou superado,
+        o processo de otimização é interrompido antecipadamente.
+
+    Returns
+    -------
+    tuple[SARIMAX, dict, float]
+        Tupla contendo:
+
+        - Modelo SARIMAX configurado com os melhores hiperparâmetros.
+        - Dicionário com os melhores hiperparâmetros encontrados.
+        - Melhor valor da métrica obtido durante a otimização.
+    """
+
     def objective(trial):
         p = trial.suggest_int('p', 0, 5)
         d = trial.suggest_int('d', 0, 2)
