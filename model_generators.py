@@ -8,6 +8,128 @@ import prophet
 import xgboost
 from typing import List
 
+def criar_ets_fipe_real(train, test, n_trials, metrica_erro, tolerancia_fipe, horizonte_previsao):
+    model, info_fipe_ets, best_value = generate_ets_model(train['brl_price'], test['brl_price'], n_trials, metrica_erro, tolerancia_fipe)
+
+    results = model.fit(disp=False)
+
+    forecast = results.forecast(steps=len(test))
+    forecast.index = test.index
+
+    print(pd.concat([forecast, test['brl_price']], axis=1))
+
+    seasonal_periods = None
+    if info_fipe_ets['seasonal']:
+        seasonal_periods = 12
+
+    damped_trend = info_fipe_ets['damped_trend']
+
+    if info_fipe_ets['trend'] is None:
+        damped_trend = False
+
+    model = ETSModel(
+        pd.concat([train['brl_price'], test['brl_price']]),
+        error=info_fipe_ets['error'],
+        trend=info_fipe_ets['trend'],
+        damped_trend=damped_trend,
+        seasonal=info_fipe_ets['seasonal'],
+        seasonal_periods=seasonal_periods
+    )
+
+    results = model.fit(disp=False)
+
+    forecast = results.forecast(steps=horizonte_previsao)
+
+    print(best_value)
+    print(forecast)
+
+    return model, best_value, forecast
+
+def criar_sarimax_fipe_real(train, test, exog_train, exog_test, exog_previsao, n_trials, metrica_erro, tolerancia_fipe, horizonte_previsao):
+    model, info_fipe_sarimax, best_value = generate_sarimax_model(train['brl_price'], test['brl_price'], exog_train, exog_test, n_trials, metrica_erro, tolerancia_fipe)
+
+    results = model.fit(disp=False)
+
+    forecast = results.forecast(steps=len(test), exog=exog_test)
+    forecast.index = test.index
+
+    print(pd.concat([forecast, test['brl_price']], axis=1))
+
+    seasonal_order = (0, 0, 0, 0)
+
+    if info_fipe_sarimax['seasonal']:
+        seasonal_order = (
+            info_fipe_sarimax['P'],
+            info_fipe_sarimax['D'],
+            info_fipe_sarimax['Q'],
+            12
+        )
+
+    model = SARIMAX(
+        pd.concat([train['brl_price'], test['brl_price']]),
+        pd.concat([exog_train, exog_test]),
+        order=(
+            info_fipe_sarimax['p'],
+            info_fipe_sarimax['d'],
+            info_fipe_sarimax['q']
+        ),
+        seasonal_order=seasonal_order,
+        trend=info_fipe_sarimax['trend'],
+        enforce_stationarity=False,
+        enforce_invertibility=False
+    )
+
+    results = model.fit(disp=False)
+
+    forecast = results.forecast(steps=horizonte_previsao, exog=exog_previsao)
+
+    print(best_value)
+    print(forecast)
+
+    return model, best_value, forecast
+
+def criar_prophet_fipe_real(df_train_prophet, df_test_prophet, n_trials, metrica_erro, tolerancia_fipe, horizonte_previsao):
+    exog = ['valor', 'exchange_rate']
+
+    model_fipe_prophet, info_fipe_prophet, best_value_fipe_prophet = generate_prophet_model(
+        df_train_prophet,
+        df_test_prophet,
+        exog,
+        n_trials,
+        metrica_erro,
+        tolerancia_fipe
+    )
+
+    model_fipe_prophet.fit(
+        df_train_prophet
+    )
+
+    forecast_fipe = model_fipe_prophet.predict(
+        df_test_prophet[['ds','valor', 'exchange_rate']]
+    )
+
+    print(best_value_fipe_prophet)
+    print(pd.concat([df_test_prophet['y'], forecast_fipe['yhat']], axis=1))
+
+    model = prophet.Prophet(**info_fipe_prophet)
+
+    model.fit(
+        pd.concat([df_train_prophet, df_test_prophet])
+    )
+
+    future = model.make_future_dataframe(periods=horizonte_previsao, freq='MS')
+
+    forecast = model.predict(
+        future.tail(horizonte_previsao)
+    )
+
+    forecast.index = forecast['ds']
+    forecast = forecast['yhat']
+
+    print(forecast)
+
+    return model, best_value_fipe_prophet, forecast
+
 def feature_engineering(df: pd.DataFrame, target: str) -> List[str]:
     new_features = []
     n_lags = 3
@@ -280,7 +402,9 @@ def generate_ets_model(train: pd.Series, test: pd.Series, n_trials: int, method:
         train,
         error=params['error'],
         trend=params['trend'],
-        damped_trend=params['damped_trend'],
+        damped_trend=params['damped_trend']
+        if params['trend'] is not None
+        else False,
         seasonal=params['seasonal'],
         seasonal_periods=seasonal_periods
     )
