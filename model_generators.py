@@ -380,7 +380,8 @@ def generate_ets_model(train: pd.Series, test: pd.Series, n_trials: int, method:
 
             return metric
 
-        except Exception:
+        except Exception as e:
+            print(e)
             return np.inf
 
     study = optuna.create_study(direction='minimize')
