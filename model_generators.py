@@ -8,127 +8,152 @@ import prophet
 import xgboost
 from typing import List
 
-def criar_ets_fipe_real(train, test, n_trials, metrica_erro, tolerancia_fipe, horizonte_previsao):
-    model, info_fipe_ets, best_value = generate_ets_model(train['brl_price'], test['brl_price'], n_trials, metrica_erro, tolerancia_fipe)
+def criar_modelos_fipe(
+        df_train: pd.DataFrame,
+        df_test: pd.DataFrame,
+        df_train_prophet: pd.DataFrame,
+        df_test_prophet: pd.DataFrame,
+        exog_train: pd.DataFrame,
+        exog_test: pd.DataFrame,
+        n_trials: int,
+        metrica_erro: str,
+        tolerancia_fipe: float,
+        target: str
+    ) -> pd.DataFrame:
 
-    results = model.fit(disp=False)
-
-    forecast = results.forecast(steps=len(test))
-    forecast.index = test.index
-
-    print(pd.concat([forecast, test['brl_price']], axis=1))
-
-    seasonal_periods = None
-    if info_fipe_ets['seasonal']:
-        seasonal_periods = 12
-
-    damped_trend = info_fipe_ets['damped_trend']
-
-    if info_fipe_ets['trend'] is None:
-        damped_trend = False
-
-    model = ETSModel(
-        pd.concat([train['brl_price'], test['brl_price']]),
-        error=info_fipe_ets['error'],
-        trend=info_fipe_ets['trend'],
-        damped_trend=damped_trend,
-        seasonal=info_fipe_ets['seasonal'],
-        seasonal_periods=seasonal_periods
-    )
-
-    results = model.fit(disp=False)
-
-    forecast = results.forecast(steps=horizonte_previsao)
-
-    print(best_value)
-    print(forecast)
-
-    return model, best_value, forecast
-
-def criar_sarimax_fipe_real(train, test, exog_train, exog_test, exog_previsao, n_trials, metrica_erro, tolerancia_fipe, horizonte_previsao):
-    model, info_fipe_sarimax, best_value = generate_sarimax_model(train['brl_price'], test['brl_price'], exog_train, exog_test, n_trials, metrica_erro, tolerancia_fipe)
-
-    results = model.fit(disp=False)
-
-    forecast = results.forecast(steps=len(test), exog=exog_test)
-    forecast.index = test.index
-
-    print(pd.concat([forecast, test['brl_price']], axis=1))
-
-    seasonal_order = (0, 0, 0, 0)
-
-    if info_fipe_sarimax['seasonal']:
-        seasonal_order = (
-            info_fipe_sarimax['P'],
-            info_fipe_sarimax['D'],
-            info_fipe_sarimax['Q'],
-            12
-        )
-
-    model = SARIMAX(
-        pd.concat([train['brl_price'], test['brl_price']]),
-        pd.concat([exog_train, exog_test]),
-        order=(
-            info_fipe_sarimax['p'],
-            info_fipe_sarimax['d'],
-            info_fipe_sarimax['q']
-        ),
-        seasonal_order=seasonal_order,
-        trend=info_fipe_sarimax['trend'],
-        enforce_stationarity=False,
-        enforce_invertibility=False
-    )
-
-    results = model.fit(disp=False)
-
-    forecast = results.forecast(steps=horizonte_previsao, exog=exog_previsao)
-
-    print(best_value)
-    print(forecast)
-
-    return model, best_value, forecast
-
-def criar_prophet_fipe_real(df_train_prophet, df_test_prophet, n_trials, metrica_erro, tolerancia_fipe, horizonte_previsao):
-    exog = ['valor', 'exchange_rate']
-
-    model_fipe_prophet, info_fipe_prophet, best_value_fipe_prophet = generate_prophet_model(
-        df_train_prophet,
-        df_test_prophet,
-        exog,
+    _, info_fipe_ets, best_value_fipe_ets = generate_ets_model(
+        df_train[target],
+        df_test[target],
         n_trials,
         metrica_erro,
         tolerancia_fipe
     )
 
-    model_fipe_prophet.fit(
-        df_train_prophet
+    _, info_fipe_sarimax, best_value_fipe_sarimax = generate_sarimax_model(
+        df_train[target],
+        df_test[target],
+        exog_train,
+        exog_test,
+        n_trials,
+        metrica_erro,
+        tolerancia_fipe
     )
 
-    forecast_fipe = model_fipe_prophet.predict(
-        df_test_prophet[['ds','valor', 'exchange_rate']]
+    _, info_fipe_prophet, best_value_fipe_prophet = generate_prophet_model(
+        df_train_prophet,
+        df_test_prophet,
+        exog_train.columns.to_list(),
+        n_trials,
+        metrica_erro,
+        tolerancia_fipe
     )
 
-    print(best_value_fipe_prophet)
-    print(pd.concat([df_test_prophet['y'], forecast_fipe['yhat']], axis=1))
+    dict_retorno = {
+        'info_fipe_ets': info_fipe_ets,
+        'best_value_fipe_ets': best_value_fipe_ets,
+        'info_fipe_sarimax': info_fipe_sarimax,
+        'best_value_fipe_sarimax': best_value_fipe_sarimax,
+        'info_fipe_prophet': info_fipe_prophet,
+        'best_value_fipe_prophet': best_value_fipe_prophet
+    }
 
-    model = prophet.Prophet(**info_fipe_prophet)
+    return dict_retorno
 
-    model.fit(
-        pd.concat([df_train_prophet, df_test_prophet])
+def criar_modelo_final_ets(info: dict, df_train: pd.DataFrame, df_test: pd.DataFrame, horizonte_previsao: int, target: str):
+    seasonal_periods = None
+    if info['seasonal']:
+        seasonal_periods = 12
+
+    damped_trend = info['damped_trend']
+
+    if info['trend'] is None:
+        damped_trend = False
+
+    model = ETSModel(
+        pd.concat([df_train[target], df_test[target]]),
+        error=info['error'],
+        trend=info['trend'],
+        damped_trend=damped_trend,
+        seasonal=info['seasonal'],
+        seasonal_periods=seasonal_periods
     )
 
-    future = model.make_future_dataframe(periods=horizonte_previsao, freq='MS')
+    model_fit = model.fit(disp=False)
+
+    forecast = model_fit.forecast(steps=horizonte_previsao)
+    forecast = forecast.rename(target)
+
+    return forecast
+
+def criar_modelo_final_prophet(
+        info: dict,
+        df_train: pd.DataFrame,
+        df_test: pd.DataFrame,
+        horizonte_previsao: int,
+        target: str,
+        df_exog_previsao: pd.DataFrame | None = None,
+    ) -> pd.Series:
+    model = prophet.Prophet(**info)
+    model.fit(pd.concat([df_train, df_test]))  
+    future = model.make_future_dataframe(periods=horizonte_previsao, freq='MS', include_history=False)
+
+    if df_exog_previsao is not None:
+        future = future.merge(df_exog_previsao, left_on="ds", right_index=True, how="left")
 
     forecast = model.predict(
-        future.tail(horizonte_previsao)
+        future
     )
 
     forecast.index = forecast['ds']
     forecast = forecast['yhat']
+    forecast = forecast.rename(target)
 
-    print(forecast)
+    return forecast
 
-    return model, best_value_fipe_prophet, forecast
+def criar_modelo_final_sarimax(
+        info: dict,
+        df_train: pd.DataFrame,
+        df_test: pd.DataFrame,
+        horizonte_previsao: int,
+        target: str,
+        df_exog_train: pd.DataFrame | None = None,
+        df_exog_test: pd.DataFrame | None = None,
+        df_exog_previsao: pd.DataFrame | None = None
+    ) -> pd.Series:
+    seasonal_order = (0, 0, 0, 0)
+
+    if info['seasonal']:
+        seasonal_order = (
+            info['P'],
+            info['D'],
+            info['Q'],
+            12
+        )
+
+    model = SARIMAX(
+        pd.concat([df_train[target], df_test[target]]),
+        exog=(
+            pd.concat([df_exog_train, df_exog_test])
+            if df_exog_train is not None and df_exog_test is not None
+            else None
+        ),
+        order=(
+            info['p'],
+            info['d'],
+            info['q']
+        ),
+        seasonal_order=seasonal_order,
+        trend=info['trend'],
+        enforce_stationarity=False,
+        enforce_invertibility=False
+    )
+
+    model_fit = model.fit(disp=False)
+
+    forecast = model_fit.forecast(steps=horizonte_previsao, exog=df_exog_previsao if df_exog_previsao is not None else None)
+    forecast = forecast.rename(target)
+
+    return forecast
 
 def feature_engineering(df: pd.DataFrame, target: str) -> List[str]:
     new_features = []
@@ -283,7 +308,7 @@ def generate_prophet_model(
     study.optimize(
         objective,
         n_trials=n_trials,
-        show_progress_bar=True
+        show_progress_bar=False
     )
 
 
@@ -389,7 +414,7 @@ def generate_ets_model(train: pd.Series, test: pd.Series, n_trials: int, method:
     study.optimize(
         objective,
         n_trials=n_trials,
-        show_progress_bar=True
+        show_progress_bar=False
     )
 
     best_value = study.best_value
@@ -527,7 +552,7 @@ def generate_sarimax_model(train: pd.Series, test: pd.Series, train_exog: pd.Dat
     study.optimize(
         objective,
         n_trials=n_trials,
-        show_progress_bar=True
+        show_progress_bar=False
     )
 
     best_value = study.best_value
