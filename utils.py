@@ -19,7 +19,7 @@ def coletar_base_skus(data_ref: datetime.datetime, skus: list[int], df_fipe) -> 
             print(f"SKU: {sku} não tem dados suficientes ({meses_totais} meses apenas)")
             continue
 
-        meses_esperados = pd.date_range(f'{data_mais_antiga_sku.year}-{data_mais_antiga_sku.month}', f'{data_ref.year}-{data_ref.month}', freq='MS')
+        meses_esperados = pd.date_range(f'{data_mais_antiga_sku.year}-{data_mais_antiga_sku.month}', f'{data_ref.year}-{data_ref.month-1}', freq='MS')
 
         df = df.reindex(meses_esperados)
 
