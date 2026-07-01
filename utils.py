@@ -184,12 +184,13 @@ def selecionar_modelo_fipe(
     best_value_fipe_ets = kwargs['best_value_fipe_ets']
     best_value_fipe_sarimax = kwargs['best_value_fipe_sarimax']
     best_value_fipe_prophet = kwargs['best_value_fipe_prophet']
+    best_value_fipe_xgboost = kwargs['best_value_fipe_xgboost']
 
     info_fipe_ets = kwargs['info_fipe_ets']
     info_fipe_sarimax = kwargs['info_fipe_sarimax']
     info_fipe_prophet = kwargs['info_fipe_prophet']
     
-    metricas = np.array([best_value_fipe_ets, best_value_fipe_sarimax, best_value_fipe_prophet])
+    metricas = np.array([best_value_fipe_ets, best_value_fipe_sarimax, best_value_fipe_prophet, best_value_fipe_xgboost])
 
     idx_metricas = np.argmin(metricas)
 
@@ -226,6 +227,20 @@ def selecionar_modelo_fipe(
             horizonte_previsao,
             target,
             df_exog_previsao
+        )
+    elif idx_metricas == 3:
+        modelo_escolhido = 'XGBOOST'
+        modelo_fipe_xgboost = kwargs['modelo_fipe_xgboost']
+        df_train_xgboost = df_train.join(df_exog_train, how='inner')
+        df_test_xgboost = df_test.join(df_exog_test, how='inner')
+
+        forecast = mg.prever_futuro_recursivo(
+            modelo_fipe_xgboost,
+            pd.concat([df_train_xgboost, df_test_xgboost]),
+            df_exog_previsao,
+            horizonte_previsao,
+            target,
+            df_exog_train.columns.tolist()
         )
 
     forecast = forecast.rename(target)

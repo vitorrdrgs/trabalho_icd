@@ -5,8 +5,8 @@ import optuna
 import pandas as pd
 import numpy as np
 import prophet
-import xgboost
-from typing import List
+import xgboost as xgb
+from typing import List, Tuple
 
 def criar_modelos_fipe(
         df_train: pd.DataFrame,
@@ -48,13 +48,24 @@ def criar_modelos_fipe(
         tolerancia_fipe
     )
 
+    modelo_fipe_xgboost, _, best_value_fipe_xgboost = generate_xgboost_model(
+        df_train.join(exog_train, how='inner'),
+        df_test.join(exog_test, how='inner'),
+        exog_train.columns.tolist(),
+        target,
+        n_trials,
+        metrica_erro
+    )
+
     dict_retorno = {
         'info_fipe_ets': info_fipe_ets,
         'best_value_fipe_ets': best_value_fipe_ets,
         'info_fipe_sarimax': info_fipe_sarimax,
         'best_value_fipe_sarimax': best_value_fipe_sarimax,
         'info_fipe_prophet': info_fipe_prophet,
-        'best_value_fipe_prophet': best_value_fipe_prophet
+        'best_value_fipe_prophet': best_value_fipe_prophet,
+        'best_value_fipe_xgboost': best_value_fipe_xgboost,
+        'modelo_fipe_xgboost': modelo_fipe_xgboost
     }
 
     return dict_retorno
@@ -155,34 +166,142 @@ def criar_modelo_final_sarimax(
 
     return forecast
 
-def feature_engineering(df: pd.DataFrame, target: str) -> List[str]:
+def feature_engineering(df: pd.DataFrame, target: str) -> Tuple[pd.DataFrame, List[str]]:
+    df_feat = df.copy()
     new_features = []
     n_lags = 3
     
-    for i in range(n_lags):
-        lag_name = f'lag_{i+1}'
-        diff_name = f'diff_{i+1}'
-        perc_name = f'perc_{i+1}'
+    for i in range(1, n_lags + 2):
+        df_feat[f'lag_{i}'] = df_feat[target].shift(i)
+        
+    for i in range(1, n_lags + 1):
+        lag_atual = f'lag_{i}'
+        lag_anterior = f'lag_{i+1}'
+        diff_name = f'diff_{i}'
+        perc_name = f'perc_{i}'
 
-        df[lag_name] = df[target].shift(i+1)
-        df[diff_name] = df[target] - df[lag_name]
-        df[perc_name] = df[diff_name] / df[target]
-
-        new_features.extend([lag_name, diff_name, perc_name])
+        df_feat[diff_name] = df_feat[lag_atual] - df_feat[lag_anterior]
+        df_feat[perc_name] = df_feat[diff_name] / df_feat[lag_anterior].replace(0, np.nan)
+        new_features.extend([lag_atual, diff_name, perc_name])
     
     mm_name = 'mm_3'
     std_name = 'std_3'
     cv_name = 'cv_3'
 
-    df[mm_name] = df[target].rolling(3).mean()
-    df[std_name] = df[target].rolling(3).std()
-    df[cv_name] = df[std_name] / df[mm_name]
-
+    df_feat[mm_name] = df_feat['lag_1'].rolling(window=3).mean()
+    df_feat[std_name] = df_feat['lag_1'].rolling(window=3).std()
+    df_feat[cv_name] = df_feat[std_name] / df_feat[mm_name]
     new_features.extend([mm_name, std_name, cv_name])
 
-    df.dropna(inplace=True)
+    return df_feat, new_features
 
-    return new_features
+def prever_futuro_recursivo(
+    modelo: xgb.XGBRegressor, 
+    df_sku: pd.DataFrame, 
+    df_exog_futuro: pd.DataFrame, 
+    horizonte_previsao: int, 
+    target: str,
+    exog_cols: List[str]
+) -> pd.Series:
+    """
+    Realiza previsões multi-step recursivas integrando variáveis exógenas futuras.
+    Nota: O índice de df_sku e df_exog_futuro deve ser homogêneo (ex: DatetimeIndex ou inteiros sequenciais)
+    """
+    previsoes = []
+    df_atual = df_sku[[target]].copy()
+    
+    for step in range(horizonte_previsao):
+        df_com_features, features_endogenas = feature_engineering(df_atual, target=target)
+        
+        linha_features = df_com_features[features_endogenas].iloc[[-1]].copy()
+        
+        indice_atual = df_exog_futuro.index[step]
+        dados_exogenos = df_exog_futuro.loc[[indice_atual], exog_cols]
+        
+        linha_features.index = [indice_atual]
+        X_novo = pd.concat([linha_features, dados_exogenos], axis=1)
+        
+        colunas_totais = features_endogenas + exog_cols
+        X_novo = X_novo[colunas_totais]
+        
+        pred = modelo.predict(X_novo)[0]
+        previsoes.append(pred)
+        
+        nova_linha = pd.DataFrame({target: [pred]}, index=[indice_atual])
+        df_atual = pd.concat([df_atual, nova_linha])
+        
+    return pd.Series(previsoes)
+
+def generate_xgboost_model(
+    train: pd.DataFrame,
+    test: pd.DataFrame,
+    exog: List[str],
+    target: str,
+    n_trials: int,
+    method: str,
+    tol: float = 0
+) -> Tuple[xgb.XGBRegressor, dict, float]:
+    """
+    Otimiza hiperparâmetros do XGBoost usando Optuna para séries temporais com inferência recursiva.
+    """
+    df_treino_feat, features_endogenas = feature_engineering(train[[target]], target=target)
+    
+    df_treino_completo = df_treino_feat.join(train[exog], how='inner')
+    df_treino_completo.dropna(inplace=True)
+    
+    X_train = df_treino_completo[features_endogenas + exog]
+    y_train = df_treino_completo[target]
+    
+    horizonte = len(test)
+    weights = np.arange(1, horizonte + 1)
+
+    def objective(trial):
+        params = {
+            "n_estimators": trial.suggest_int("n_estimators", 50, 500),
+            "max_depth": trial.suggest_int("max_depth", 3, 10),
+            "learning_rate": trial.suggest_float("learning_rate", 0.01, 0.3, log=True),
+            "subsample": trial.suggest_float("subsample", 0.5, 1.0),
+            "colsample_bytree": trial.suggest_float("colsample_bytree", 0.5, 1.0),
+            "min_child_weight": trial.suggest_int("min_child_weight", 1, 10),
+            "random_state": 42,
+            "n_jobs": -1
+        }
+
+        try:
+            model = xgb.XGBRegressor(**params)
+            model.fit(X_train, y_train)
+
+            preds = prever_futuro_recursivo(
+                modelo=model,
+                df_sku=train,
+                df_exog_futuro=test,
+                horizonte_previsao=horizonte,
+                target=target,
+                exog_cols=exog
+            )
+            
+            if method == 'mape':
+                metric = mean_absolute_percentage_error(test[target], preds, sample_weight=weights)
+            else:
+                metric = mean_absolute_error(test[target], preds, sample_weight=weights)
+
+            if metric <= tol:
+                trial.study.stop()
+
+            return metric
+            
+        except Exception as e:
+            print(f"Erro no Trial: {e}")
+            return np.inf
+
+    study = optuna.create_study(direction="minimize")
+    study.optimize(objective, n_trials=n_trials, show_progress_bar=False)
+
+    best_params = study.best_params
+    best_model = xgb.XGBRegressor(**best_params, random_state=42, n_jobs=-1)
+    best_model.fit(X_train, y_train)
+
+    return best_model, best_params, study.best_value
     
 def generate_prophet_model(
     train: pd.DataFrame,
