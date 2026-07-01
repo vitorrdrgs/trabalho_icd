@@ -7,8 +7,6 @@ import numpy as np
 def coletar_base_skus(data_ref: datetime.datetime, skus: list[int], df_fipe) -> pd.DataFrame:
     df_previsao_list = []
 
-    data_ref = pd.to_datetime('2026-04-01')
-
     for sku in skus:
         df = df_fipe.query("sku == @sku").copy()
         df = df.set_index('reference_date')
